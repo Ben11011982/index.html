@@ -24,11 +24,13 @@ param(
         "M:\Engineering\Automation\Fanuc Robot Backup\04112023\r3r4\mnt_data\md_ls"
     ),
 
-    # Naming convention to match.  *  = any characters,  ?  = exactly one character
+    # Naming convention(s) to match. List one or more, separated by commas.
+    #   *  = any characters,  ?  = exactly one character
     #   "r?_*.ls"          -> every robot (r1..r9), every program   (default)
     #   "r?_70x87_*.ls"    -> only the 70x87 programs
     #   "r?_*_rh_tg.ls"    -> only the _rh_tg programs
-    [string]$FilePattern = "r?_*.ls",
+    #   @("gen_*.ls", "pns*.ls") -> several patterns at once
+    [string[]]$FilePattern = @("r?_*.ls"),
 
     # Programs to SKIP, even if they match FilePattern. List one or more, separated
     # by commas.  Leave as @() to skip nothing.
@@ -86,6 +88,10 @@ try {
 }
 Write-Host "Saving to: $OutputPath"
 
+# Allow several file patterns on the command line separated by ;
+$FilePattern = @($FilePattern | ForEach-Object { $_ -split ';' } |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
 # Allow several exclude patterns on the command line separated by ;
 $ExcludePattern = @($ExcludePattern | ForEach-Object { $_ -split ';' } |
     ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -138,7 +144,10 @@ $files = for ($i = 0; $i -lt $SourceFolder.Count; $i++) {
 }
 $files = @($files |
     Where-Object { $_.File.FullName -ne $OutputPath -and $_.File.Extension -ieq ".ls" } |
-    Where-Object { $_.File.Name -like $FilePattern } |
+    Where-Object {
+        $name = $_.File.Name
+        [bool]($FilePattern | Where-Object { $name -like $_ })
+    } |
     Where-Object {
         $name = $_.File.Name
         -not ($ExcludePattern | Where-Object { $name -like $_ })
@@ -149,7 +158,7 @@ $files = @($files |
     } }, Order)
 
 if (-not $files) {
-    Write-Host "No files matching '$FilePattern' found in: $($SourceFolder -join ', ')" -ForegroundColor Yellow
+    Write-Host "No files matching '$($FilePattern -join ', ')' found in: $($SourceFolder -join ', ')" -ForegroundColor Yellow
     Read-Host "Press Enter to close"
     exit 1
 }
@@ -164,7 +173,7 @@ $out = [System.IO.File]::Create($OutputPath)
 try {
     $header  = "PLATFORM PROGRAMMING$newline"
     foreach ($folder in $SourceFolder) { $header += "Source folder : $folder$newline" }
-    $header += "File pattern  : $FilePattern$newline"
+    $header += "File pattern  : $($FilePattern -join ', ')$newline"
     if ($ExcludePattern) { $header += "Excluded      : $($ExcludePattern -join ', ')$newline" }
     $header += "Created       : $(Get-Date -Format 'yyyy-MM-dd HH:mm')$newline"
     $header += "Files ($($files.Count)):$newline"
