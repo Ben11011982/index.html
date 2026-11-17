@@ -60,6 +60,19 @@ if ([System.IO.Path]::IsPathRooted($OutputName)) {
     $OutputPath = Join-Path $SourceFolder[0] $OutputName
 }
 
+# Check the output path is valid before writing
+try {
+    $OutputPath = [System.IO.Path]::GetFullPath($OutputPath)
+} catch {
+    Write-Host "The output file path is not valid:" -ForegroundColor Red
+    Write-Host "  $OutputPath"
+    Write-Host "Check `$OutputName and `$SourceFolder in the SETTINGS section." -ForegroundColor Yellow
+    Write-Host "(File names cannot contain  : * ? `" < > |  )"
+    Read-Host "Press Enter to close"
+    exit 1
+}
+Write-Host "Saving to: $OutputPath"
+
 # Find matching files in every folder
 $files = foreach ($folder in $SourceFolder) {
     $searchArgs = @{ LiteralPath = $folder; Filter = $FilePattern; File = $true }
