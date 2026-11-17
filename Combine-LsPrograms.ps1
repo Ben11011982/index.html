@@ -41,7 +41,13 @@ param(
     [string]$OutputName = "Platform Programming.txt",
 
     # Also search sub-folders?  $true / $false
-    [bool]$IncludeSubfolders = $false
+    [bool]$IncludeSubfolders = $false,
+
+    # Label for each source folder, in the same order as SourceFolder.  The label
+    # is shown on every program so same-name files (e.g. all_step.ls from r1r2 and
+    # from r3r4) can be told apart.  Leave as @() to be asked each time it runs.
+    #   @("R1R2", "R3R4")
+    [string[]]$FolderLabels = @()
 
     # =====================================================================
 )
@@ -84,22 +90,63 @@ Write-Host "Saving to: $OutputPath"
 $ExcludePattern = @($ExcludePattern | ForEach-Object { $_ -split ';' } |
     ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
-# Find matching files in every folder
-$files = foreach ($folder in $SourceFolder) {
-    $searchArgs = @{ LiteralPath = $folder; Filter = $FilePattern; File = $true }
-    if ($IncludeSubfolders) { $searchArgs.Recurse = $true }
-    Get-ChildItem @searchArgs
+# ---- Folder labels ---------------------------------------------------------
+$FolderLabels = @($FolderLabels | ForEach-Object { $_ -split ';' } |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+if ($SourceFolder.Count -eq 1) {
+    $labels = @("")          # one folder: no label needed
+} elseif ($FolderLabels.Count -eq $SourceFolder.Count) {
+    $labels = $FolderLabels
+} else {
+    # Suggest the part of the path that is different between the folders
+    # (e.g. "r1r2" and "r3r4")
+    $parts = @($SourceFolder | ForEach-Object { ,($_.TrimEnd('\') -split '\\') })
+    $diffIndex = -1
+    $minLen = ($parts | ForEach-Object { $_.Count } | Measure-Object -Minimum).Minimum
+    for ($i = 0; $i -lt $minLen; $i++) {
+        $seg = @($parts | ForEach-Object { $_[$i].ToLower() } | Select-Object -Unique)
+        if ($seg.Count -gt 1) { $diffIndex = $i; break }
+    }
+
+    Write-Host ""
+    Write-Host "$($SourceFolder.Count) source folders found. Enter a label for each one."
+    Write-Host "(Press Enter to use the suggestion in [brackets].)"
+    $labels = @()
+    for ($i = 0; $i -lt $SourceFolder.Count; $i++) {
+        if ($diffIndex -ge 0) { $suggest = $parts[$i][$diffIndex].ToUpper() }
+        else                  { $suggest = "FOLDER$($i + 1)" }
+        Write-Host ""
+        Write-Host "  $($SourceFolder[$i])"
+        $answer = Read-Host "  Label [$suggest]"
+        if ([string]::IsNullOrWhiteSpace($answer)) { $answer = $suggest }
+        $labels += $answer.Trim()
+    }
+    Write-Host ""
 }
-$files = $files |
-    Where-Object { $_.FullName -ne $OutputPath -and $_.Extension -ieq ".ls" } |
+
+# ---- Find matching files in every folder ------------------------------------
+# Names are checked with an exact wildcard match on the full file name only.
+# (Get-ChildItem -Filter is NOT used, because Windows also matches the old
+#  8.3 short names, so a pattern like "gen_*.ls" could pick up "genysis_1.ls".)
+$files = for ($i = 0; $i -lt $SourceFolder.Count; $i++) {
+    $searchArgs = @{ LiteralPath = $SourceFolder[$i]; File = $true }
+    if ($IncludeSubfolders) { $searchArgs.Recurse = $true }
+    foreach ($f in Get-ChildItem @searchArgs) {
+        [pscustomobject]@{ File = $f; Label = $labels[$i]; Order = $i }
+    }
+}
+$files = @($files |
+    Where-Object { $_.File.FullName -ne $OutputPath -and $_.File.Extension -ieq ".ls" } |
+    Where-Object { $_.File.Name -like $FilePattern } |
     Where-Object {
-        $name = $_.Name
+        $name = $_.File.Name
         -not ($ExcludePattern | Where-Object { $name -like $_ })
     } |
     Sort-Object @{ Expression = {
         # Natural sort so r2 comes before r10
-        [regex]::Replace($_.Name.ToLower(), '\d+', { $args[0].Value.PadLeft(10, '0') })
-    } }
+        [regex]::Replace($_.File.Name.ToLower(), '\d+', { $args[0].Value.PadLeft(10, '0') })
+    } }, Order)
 
 if (-not $files) {
     Write-Host "No files matching '$FilePattern' found in: $($SourceFolder -join ', ')" -ForegroundColor Yellow
@@ -121,13 +168,24 @@ try {
     if ($ExcludePattern) { $header += "Excluded      : $($ExcludePattern -join ', ')$newline" }
     $header += "Created       : $(Get-Date -Format 'yyyy-MM-dd HH:mm')$newline"
     $header += "Files ($($files.Count)):$newline"
-    foreach ($f in $files) { $header += "   $($f.Name)   ($($f.DirectoryName))$newline" }
+    if ($SourceFolder.Count -gt 1) {
+        $header += "Folder labels :$newline"
+        for ($i = 0; $i -lt $SourceFolder.Count; $i++) {
+            $header += "   [$($labels[$i])]  $($SourceFolder[$i])$newline"
+        }
+    }
+    foreach ($item in $files) {
+        $tag = if ($item.Label) { "[$($item.Label)] " } else { "" }
+        $header += "   $tag$($item.File.Name)$newline"
+    }
     $header += $newline
     $bytes = $enc.GetBytes($header)
     $out.Write($bytes, 0, $bytes.Length)
 
-    foreach ($f in $files) {
-        $sep = "$divider$newline" + "FILE: $($f.Name)$newline" + "FROM: $($f.DirectoryName)$newline" + "$divider$newline"
+    foreach ($item in $files) {
+        $f   = $item.File
+        $tag = if ($item.Label) { "[$($item.Label)] " } else { "" }
+        $sep = "$divider$newline" + "FILE: $tag$($f.Name)$newline" + "FROM: $($f.DirectoryName)$newline" + "$divider$newline"
         $bytes = $enc.GetBytes($sep)
         $out.Write($bytes, 0, $bytes.Length)
 
@@ -142,7 +200,7 @@ try {
         $bytes = $enc.GetBytes($newline)
         $out.Write($bytes, 0, $bytes.Length)
 
-        Write-Host "  added $($f.Name)"
+        Write-Host "  added $tag$($f.Name)"
     }
 }
 finally {
