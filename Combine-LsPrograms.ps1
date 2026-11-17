@@ -30,6 +30,13 @@ param(
     #   "r?_*_rh_tg.ls"    -> only the _rh_tg programs
     [string]$FilePattern = "r?_*.ls",
 
+    # Programs to SKIP, even if they match FilePattern. List one or more, separated
+    # by commas.  Leave as @() to skip nothing.
+    #   @("*_tg.ls")                  -> skip all the _tg programs
+    #   @("r?_83x87_*.ls")            -> skip all the 83x87 programs
+    #   @("r1_70x87_rh.ls", "*_tg.ls") -> skip one exact file and all _tg programs
+    [string[]]$ExcludePattern = @(),
+
     # Name of the combined file (saved in the FIRST SourceFolder unless a full path is given)
     [string]$OutputName = "Platform Programming.txt",
 
@@ -73,6 +80,10 @@ try {
 }
 Write-Host "Saving to: $OutputPath"
 
+# Allow several exclude patterns on the command line separated by ;
+$ExcludePattern = @($ExcludePattern | ForEach-Object { $_ -split ';' } |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
 # Find matching files in every folder
 $files = foreach ($folder in $SourceFolder) {
     $searchArgs = @{ LiteralPath = $folder; Filter = $FilePattern; File = $true }
@@ -81,6 +92,10 @@ $files = foreach ($folder in $SourceFolder) {
 }
 $files = $files |
     Where-Object { $_.FullName -ne $OutputPath -and $_.Extension -ieq ".ls" } |
+    Where-Object {
+        $name = $_.Name
+        -not ($ExcludePattern | Where-Object { $name -like $_ })
+    } |
     Sort-Object @{ Expression = {
         # Natural sort so r2 comes before r10
         [regex]::Replace($_.Name.ToLower(), '\d+', { $args[0].Value.PadLeft(10, '0') })
@@ -103,6 +118,7 @@ try {
     $header  = "PLATFORM PROGRAMMING$newline"
     foreach ($folder in $SourceFolder) { $header += "Source folder : $folder$newline" }
     $header += "File pattern  : $FilePattern$newline"
+    if ($ExcludePattern) { $header += "Excluded      : $($ExcludePattern -join ', ')$newline" }
     $header += "Created       : $(Get-Date -Format 'yyyy-MM-dd HH:mm')$newline"
     $header += "Files ($($files.Count)):$newline"
     foreach ($f in $files) { $header += "   $($f.Name)   ($($f.DirectoryName))$newline" }
